@@ -1,5 +1,6 @@
 """Carga, limpeza e divisão dos dados de interação usuário-item."""
 from dataclasses import dataclass
+import time
 from pathlib import Path
 
 import numpy as np
@@ -30,15 +31,32 @@ def load_interactions(cfg: dict) -> pd.DataFrame:
     df["rating"] = raw[cols["rating"]] if cols.get("rating") else 1.0
     df["timestamp"] = raw[cols["timestamp"]] if cols.get("timestamp") else np.arange(len(raw))
 
-    # Avaliações feitas pela interface (se existirem)
-    extra = _resolve(cfg.get("storage", {}).get("new_ratings_path"))
-    if extra is not None and extra.exists():
-        new = pd.read_csv(extra)
-        if not new.empty:
-            new["user"] = new["user"].astype(df["user"].dtype)
-            new["item"] = new["item"].astype(df["item"].dtype)
-            df = pd.concat([df, new[df.columns]], ignore_index=True)
     return df
+
+
+def load_new_ratings(cfg: dict) -> pd.DataFrame:
+    """Avaliações gravadas pela interface (vazio se ainda não houver)."""
+    path = _resolve(cfg.get("storage", {}).get("new_ratings_path"))
+    if path is None or not path.exists():
+        return pd.DataFrame(columns=["user", "item", "rating", "timestamp"])
+    return pd.read_csv(path)
+
+
+def append_rating(cfg: dict, user, item, rating: float) -> None:
+    """Grava uma avaliação feita na interface (a mais recente prevalece na leitura)."""
+    path = _resolve(cfg["storage"]["new_ratings_path"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = pd.DataFrame([{"user": user, "item": item, "rating": rating,
+                         "timestamp": int(time.time())}])
+    row.to_csv(path, mode="a", header=not path.exists(), index=False)
+
+
+def next_user_id(ds: "Dataset"):
+    """Id para um novo usuário, no mesmo formato dos ids da base (numérico ou texto)."""
+    ids = ds.user_ids
+    if np.issubdtype(ids.dtype, np.integer):
+        return int(ids.max()) + 1
+    return f"novo_{len(ids) + 1}"
 
 
 def load_items(cfg: dict) -> pd.DataFrame:
@@ -146,8 +164,18 @@ def build_dataset(df: pd.DataFrame, items: pd.DataFrame,
                    user_ids=user_ids, item_ids=item_ids, matrix=matrix)
 
 
-def load_dataset(cfg: dict) -> tuple[Dataset, dict]:
+def load_dataset(cfg: dict, include_new: bool = True) -> tuple[Dataset, dict]:
+    """Carrega + trata a base. As avaliações da interface entram depois da limpeza, para que
+    um usuário novo (com poucas avaliações) não seja removido pelo filtro de mínimo."""
     df, report = clean(load_interactions(cfg), cfg)
+    if include_new:
+        new = load_new_ratings(cfg)
+        if not new.empty:
+            new = new.astype({"user": df["user"].dtype, "item": df["item"].dtype})
+            new = new[new["item"].isin(df["item"].unique())]
+            df = (pd.concat([df, new[df.columns]], ignore_index=True)
+                  .sort_values("timestamp").drop_duplicates(["user", "item"], keep="last"))
+            report["avaliacoes_da_interface"] = len(new)
     return build_dataset(df, load_items(cfg)), report
 
 

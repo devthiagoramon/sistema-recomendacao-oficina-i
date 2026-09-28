@@ -9,7 +9,8 @@ sys.path.insert(0, str(ROOT / "src"))
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
-from recsys.data import dataset_summary, load_config, load_dataset  # noqa: E402
+from recsys.data import (append_rating, dataset_summary, load_config,  # noqa: E402
+                         load_dataset, next_user_id)
 from recsys.models import ItemKNN, PopularityRecommender, UserKNN  # noqa: E402
 
 st.set_page_config(page_title="Recomendador", page_icon="🎬", layout="wide")
@@ -32,15 +33,15 @@ st.markdown("""
 
 
 @st.cache_data(show_spinner="Carregando e tratando os dados...")
-def get_data(_version: float):
+def get_data(version: float):
     cfg = load_config()
     ds, report = load_dataset(cfg)
     return cfg, ds, report
 
 
 @st.cache_resource(show_spinner="Treinando o modelo...")
-def get_model(kind: str, _version: float):
-    cfg, ds, _ = get_data(_version)
+def get_model(kind: str, version: float):
+    cfg, ds, _ = get_data(version)
     m = cfg["model"]
     model = {
         "Item-based CF": lambda: ItemKNN(m["neighbors"], m["shrinkage"]),
@@ -76,7 +77,10 @@ cfg, ds, report = get_data(version)
 # ---------- Barra lateral ----------
 st.sidebar.title("🎬 Recomendador")
 st.sidebar.caption(cfg["dataset"]["name"])
-user_choice = st.sidebar.selectbox("Usuário", [NEW_USER, *ds.user_ids.tolist()], index=1)
+st.session_state.setdefault("user_select", ds.user_ids.tolist()[0])
+if st.session_state["user_select"] not in [NEW_USER, *ds.user_ids.tolist()]:
+    st.session_state["user_select"] = NEW_USER
+user_choice = st.sidebar.selectbox("Usuário", [NEW_USER, *ds.user_ids.tolist()], key="user_select")
 model_kind = st.sidebar.selectbox("Modelo", ["Item-based CF", "User-based CF", "Popularidade"])
 n_recs = st.sidebar.slider("Quantidade de recomendações", 5, 30, 10)
 with st.sidebar.expander("Sobre a base"):
@@ -90,7 +94,8 @@ user_hist = (ds.df[ds.df["user"] == user_id].sort_values(["rating", "timestamp"]
 st.title("Sistema de Recomendação")
 st.caption("Filtragem colaborativa · recomendações personalizadas sem repetir itens já conhecidos")
 
-tab_hist, tab_recs = st.tabs(["📚 Histórico", "✨ Recomendações"])
+tab_hist, tab_recs, tab_rate, tab_res = st.tabs(
+    ["📚 Histórico", "✨ Recomendações", "⭐ Avaliar itens", "📊 Resultados"])
 
 # ---------- Histórico ----------
 with tab_hist:
@@ -130,3 +135,58 @@ with tab_recs:
                 why = "Porque você avaliou: " + "; ".join(ds.title(j) for j, _ in ex)
         st.markdown(card(ds.title(item), ds.extra(item), rank=pos,
                          right=f"score {score:.2f}", why=why), unsafe_allow_html=True)
+
+# ---------- Avaliar itens ----------
+def save_rating(item_id, rating):
+    """Callback do botão: grava a nota; usuário novo ganha um id e passa a ser o selecionado."""
+    uid = user_id
+    if uid is None:
+        uid = next_user_id(ds)
+        st.session_state["user_select"] = uid
+    append_rating(cfg, uid, item_id, rating)
+    st.session_state["saved_msg"] = f"Avaliação de «{ds.title(item_id)}» salva para o usuário {uid}."
+
+
+with tab_rate:
+    st.subheader("Avaliar um item")
+    if user_id is None:
+        st.info("Você está como **novo usuário**. Ao salvar a primeira avaliação, um usuário é "
+                "criado e as recomendações passam a ser personalizadas.")
+    if msg := st.session_state.pop("saved_msg", None):
+        st.success(msg + " Veja as novas recomendações na aba ✨.")
+    query = st.text_input("Buscar item pelo título", placeholder="ex.: matrix, toy story...")
+    if query:
+        found = ds.items[ds.items["title"].str.contains(query, case=False, regex=False)]
+        found = found[found.index.isin(ds.item_ids)].head(20)
+    else:
+        found = ds.items.iloc[0:0]
+    if query and found.empty:
+        st.warning("Nenhum item encontrado.")
+    if not found.empty:
+        item_id = st.selectbox("Item", found.index.tolist(), format_func=ds.title)
+        lo, hi = cfg["dataset"]["rating_scale"]
+        step = 0.5 if lo % 1 else 1.0
+        already = user_hist[user_hist["item"] == item_id]["rating"]
+        default = float(already.iloc[0]) if len(already) else round((lo + hi) / 2 / step) * step
+        rating = st.slider("Sua nota", float(lo), float(hi), default, step)
+        if len(already):
+            st.caption(f"Você já avaliou este item com {already.iloc[0]:g}; salvar substitui a nota.")
+        st.button("Salvar avaliação", type="primary", on_click=save_rating, args=(item_id, rating))
+
+# ---------- Resultados ----------
+with tab_res:
+    st.subheader("Avaliação offline dos modelos")
+    metrics_path = ROOT / "results" / "metrics.csv"
+    if metrics_path.exists():
+        res = pd.read_csv(metrics_path, index_col="Modelo")
+        st.dataframe(res.style.format("{:.4f}").highlight_max(axis=0, color="#4a1418"),
+                     width="stretch")
+        rank_cols = [c for c in res.columns if c.split("@")[0] in ("Precision", "Recall", "NDCG")]
+        st.bar_chart(res[rank_cols])
+        st.caption("Hold-out temporal: os 20% de avaliações mais recentes de cada usuário formam "
+                   "o teste. Itens com nota ≥ limiar contam como relevantes. RMSE/MAE: quanto "
+                   "menor, melhor; as demais métricas: quanto maior, melhor.")
+    else:
+        st.info("Rode `python scripts/evaluate.py` para gerar as métricas.")
+    with st.expander("Tratamento dos dados (linhas restantes após cada etapa)"):
+        st.json(report)

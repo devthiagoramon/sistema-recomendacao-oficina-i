@@ -12,7 +12,7 @@ from recsys.models import ItemKNN, PopularityRecommender, RandomRecommender, Use
 
 def main():
     cfg = load_config()
-    ds, report = load_dataset(cfg)
+    ds, report = load_dataset(cfg, include_new=False)
     train, test = train_test_split(ds, cfg)
     print(f"Treino: {train.matrix.nnz} interações | Teste: {len(test)} interações")
 
