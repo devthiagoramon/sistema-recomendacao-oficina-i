@@ -74,6 +74,9 @@ class PopularityRecommender(BaseRecommender):
     def scores(self, u_idx: int) -> np.ndarray:
         return self.item_scores
 
+    def predict_ratings(self, u_idx: int) -> np.ndarray:
+        return self.item_scores
+
 
 class RandomRecommender(BaseRecommender):
     """Baseline mínimo de comparação (sorteia itens)."""
