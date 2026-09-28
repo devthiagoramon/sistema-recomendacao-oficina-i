@@ -60,3 +60,13 @@ def test_recommendations_exclude_seen_items(tiny, model):
 def test_cold_start_returns_popular_items(tiny):
     model = ItemKNN(5, 0).fit(tiny)
     assert len(model.recommend("usuario_novo", 3)) == 3
+
+
+def test_implicit_feedback_is_not_degenerate():
+    """Sem notas (tudo 1.0) o CF deve continuar diferenciando itens, não virar popularidade."""
+    inter = [(u, i) for u, items in {1: "abc", 2: "abc", 3: "abd", 4: "de", 5: "de", 6: "ae"}.items()
+             for i in items]
+    df = pd.DataFrame(inter, columns=["user", "item"]).assign(rating=1.0, timestamp=0)
+    ds = build_dataset(df, pd.DataFrame(columns=["title", "extra"]))
+    model = ItemKNN(5, 0).fit(ds)
+    assert len(set(model.scores(ds.user_index(1)).round(6))) > 1

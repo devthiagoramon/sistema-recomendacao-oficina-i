@@ -91,10 +91,16 @@ class RandomRecommender(BaseRecommender):
 
 
 def _center_by_user(m: sparse.csr_matrix) -> tuple[sparse.csr_matrix, np.ndarray]:
-    """Subtrai de cada nota a média do usuário (só nas posições avaliadas)."""
+    """Subtrai de cada nota a média do usuário (só nas posições avaliadas).
+
+    Em feedback implícito (todas as notas iguais) não há o que centrar: centrar zeraria
+    a matriz inteira, então os valores originais são mantidos.
+    """
     counts = np.diff(m.indptr)
     means = np.divide(np.asarray(m.sum(axis=1)).ravel(), counts,
                       out=np.zeros(m.shape[0]), where=counts > 0)
+    if np.ptp(m.data) == 0:
+        means = np.zeros(m.shape[0])
     c = m.copy().astype(np.float64)
     c.data = c.data - np.repeat(means, counts)
     return c, means
