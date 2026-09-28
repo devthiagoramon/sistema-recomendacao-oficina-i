@@ -66,7 +66,7 @@ class PopularityRecommender(BaseRecommender):
     def _fit(self, ds: Dataset):
         m = ds.matrix
         votes = np.diff(m.tocsc().indptr).astype(float)
-        sums = np.asarray(m.sum(axis=0)).ravel()
+        sums = np.asarray(m.sum(axis=0), dtype=float).ravel()
         mean_item = np.divide(sums, votes, out=np.zeros_like(sums), where=votes > 0)
         c = m.data.mean()
         self.item_scores = (votes * mean_item + self.min_votes * c) / (votes + self.min_votes)

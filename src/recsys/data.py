@@ -139,7 +139,7 @@ def build_dataset(df: pd.DataFrame, items: pd.DataFrame,
     cols = iidx.reindex(df["item"]).to_numpy()
     ok = ~(np.isnan(rows) | np.isnan(cols))
     matrix = sparse.csr_matrix(
-        (df["rating"].to_numpy()[ok], (rows[ok].astype(int), cols[ok].astype(int))),
+        (df["rating"].to_numpy(dtype=float)[ok], (rows[ok].astype(int), cols[ok].astype(int))),
         shape=(len(user_ids), len(item_ids)),
     )
     return Dataset(df=df.reset_index(drop=True), items=items,
