@@ -1,0 +1,35 @@
+# Configuração da base de dados. Para usar outra base, aponte "path" para o
+# seu CSV e ajuste o mapeamento de colunas abaixo.
+dataset:
+  name: MovieLens (ml-latest-small)
+  interactions_path: data/ml-latest-small/ratings.csv
+  items_path: data/ml-latest-small/movies.csv   # opcional (títulos dos itens); use null se não houver
+  sep: ","
+  columns:
+    user: userId
+    item: movieId
+    rating: rating        # use null se a base só tiver interações (feedback implícito)
+    timestamp: timestamp  # opcional; use null se não houver
+  items_columns:
+    item: movieId
+    title: title
+    extra: genres         # opcional (ex.: gênero/categoria); use null se não houver
+  rating_scale: [0.5, 5.0]
+  relevance_threshold: 4.0   # nota mínima para considerar um item "relevante"
+
+preprocessing:
+  min_user_interactions: 5
+  min_item_interactions: 3
+
+model:
+  neighbors: 30          # vizinhos considerados na predição
+  shrinkage: 10          # penaliza similaridades com poucos co-avaliadores
+  popularity_min_votes: 20
+
+evaluation:
+  test_fraction: 0.2     # fração mais recente de cada usuário vai para teste
+  k: 10
+  min_user_interactions_for_test: 5
+
+storage:
+  new_ratings_path: data/user_ratings.csv   # avaliações feitas pela interface
