@@ -1,4 +1,4 @@
-# Sistema de Recomendação de Filmes por Filtragem Colaborativa
+# Sistema de Recomendação de Livros por Filtragem Colaborativa
 
 Trabalho da disciplina Oficina I. Sistema que recomenda itens a partir do histórico de avaliações de vários usuários (filtragem colaborativa), com interface web para consultar históricos, ver recomendações e avaliar itens.
 
@@ -20,34 +20,36 @@ Construir e avaliar um sistema de recomendação que:
 - **Item-based:** dois itens são parecidos se os mesmos usuários os avaliam de modo parecido. Um item é pontuado pelas notas que o usuário deu aos itens mais similares a ele. Como a similaridade entre itens muda pouco, o modelo é estável e permite **explicar** a recomendação ("porque você avaliou X").
 - **User-based:** busca os usuários mais parecidos com o alvo e pontua cada item pela média ponderada das notas desses vizinhos.
 - **Similaridade:** cosseno sobre notas **centradas na média do usuário**, o que corrige o fato de alguns usuários darem notas sistematicamente altas ou baixas. Com **shrinkage** `n/(n+λ)`, pares com poucos co-avaliadores pesam menos. Só os `k` vizinhos mais similares são mantidos.
-- **Cold-start:** sem histórico não há similaridade a calcular. O sistema recomenda os itens mais populares, ordenados pela **média bayesiana** `(v·R + m·C)/(v + m)`. Ela evita que um item com 2 notas 5,0 supere um clássico com 300 notas de média 4,4.
+- **Cold-start:** sem histórico não há similaridade a calcular. O sistema recomenda os itens mais populares, ordenados pela **média bayesiana** `(v·R + m·C)/(v + m)`. Ela evita que um item com 2 notas 10 supere um clássico com 300 notas de média 8,9.
 - **Baselines:** popularidade e aleatório, para mostrar que a filtragem colaborativa agrega valor.
 
 ## 3. Dados
 
-Base padrão: **MovieLens `ml-latest-small`** (GroupLens), com avaliações de 0,5 a 5,0.
+Base: **Book-Crossing** ([Kaggle · ruchi798/bookcrossing-dataset](https://www.kaggle.com/datasets/ruchi798/bookcrossing-dataset)), com avaliações de livros feitas por leitores de uma comunidade online. Notas de 1 a 10. O catálogo (título, autor, ano, categoria) vem do mesmo dataset.
 
 | | Bruto | Após tratamento |
 |---|---|---|
-| Interações | 100.836 | 94.794 |
-| Usuários | 610 | 610 |
-| Itens (filmes) | 9.724 | 4.980 |
-| Esparsidade | — | 96,88 % |
-| Nota média | — | 3,52 |
+| Interações | 1.031.175 | 82.948 |
+| Usuários | — | 5.431 |
+| Itens (livros) | 271.379 no catálogo | 4.368 |
+| Esparsidade | — | 99,65 % |
+| Nota média | — | 7,85 |
 
 **Tratamento** (`src/recsys/data.py`):
 
 1. remoção de nulos e conversão de tipos;
-2. descarte de notas fora da escala configurada;
-3. remoção de duplicatas usuário–item (fica a mais recente);
-4. filtro iterativo de esparsidade: usuários com < 5 avaliações e filmes com < 3 avaliações saem;
+2. descarte de notas fora da escala 1–10. No Book-Crossing a nota **0 significa "leu, mas não avaliou"** (feedback implícito, 63 % das interações), não uma nota baixa. Foram descartadas para não contaminar o gosto do usuário;
+3. remoção de duplicatas usuário–item;
+4. filtro iterativo de esparsidade: usuários com < 5 avaliações e livros com < 8 avaliações saem;
 5. mapeamento dos ids para índices contíguos e construção da matriz esparsa (CSR).
 
-O relatório do que sobra após cada etapa aparece na aba **Resultados** da interface.
+O funil do tratamento aparece na aba **Visão geral** da interface. O ISBN é o id do livro e é lido como texto (há zeros à esquerda e o dígito `X`).
+
+`scripts/prepare_data.py` baixa o dataset do Kaggle (download anônimo, sem token) e gera `data/bookcrossing/ratings.csv` e `books.csv`.
 
 ### Usar outra base de dados
 
-Nenhum código precisa mudar. Edite `config.yaml`:
+Basta editar `config.yaml`:
 
 ```yaml
 dataset:
@@ -55,18 +57,18 @@ dataset:
   sep: ";"
   columns: {user: cliente, item: produto, rating: nota, timestamp: data}   # rating/timestamp podem ser null
   items_path: data/produtos.csv        # opcional (títulos); null se não houver
-  items_columns: {item: id, title: nome, extra: categoria}
+  items_columns: {item: id, title: nome, extra: categoria, author: null, year: null}
   rating_scale: [1, 5]
 ```
 
-Se a base não tiver nota (`rating: null`), toda interação vale 1,0 (**feedback implícito**) e o modelo passa a trabalhar sem centralização. Isso foi testado com uma base sintética de compras.
+Se a base não tiver nota (`rating: null`), toda interação vale 1,0 (**feedback implícito**) e o modelo passa a trabalhar sem centralização. Sem coluna de data (`timestamp: null`), use `evaluation.split: random`.
 
 ## 4. Método
 
-- **Divisão treino/teste:** hold-out **temporal por usuário**. Os 20 % de avaliações mais recentes de cada usuário (com ≥ 5 avaliações) vão para teste. O modelo é treinado no passado e testado no "futuro", como no uso real.
-- **Item relevante:** nota ≥ 4,0 no teste.
-- **Recomendação:** o modelo pontua todos os itens, **os já conhecidos pelo usuário são mascarados** e sai o top-N.
-- **Hiperparâmetros** (`config.yaml`): 30 vizinhos, shrinkage 10, mínimo de 20 votos para a popularidade.
+- **Divisão treino/teste:** hold-out **por usuário**. 20 % das avaliações de cada usuário (com ≥ 5 avaliações) vão para teste, sorteadas com semente fixa (`seed: 42`). O Book-Crossing não tem data, então a divisão temporal não é possível; o código a oferece (`split: temporal`) para bases com timestamp. Resultado: 68.133 interações de treino e 14.815 de teste.
+- **Item relevante:** nota ≥ 8 no teste.
+- **Recomendação:** o modelo pontua todos os livros, **os já conhecidos pelo usuário são mascarados** e sai o top-N.
+- **Hiperparâmetros** (`config.yaml`): 30 vizinhos, shrinkage 10, mínimo de 10 votos para a popularidade.
 - **Detalhe de implementação:** os 30 vizinhos são os 30 itens (ou usuários) mais similares em toda a base, e não apenas entre os que o usuário avaliou. É uma simplificação comum que mantém o cálculo vetorizado e rápido.
 
 ### Métricas
@@ -83,40 +85,41 @@ Se a base não tiver nota (`rating: null`), toda interação vale 1,0 (**feedbac
 
 ## 5. Resultados
 
-Gerados por `python scripts/evaluate.py` (arquivo `results/metrics.csv`), sobre 18.736 interações de teste. As métricas de ranking são calculadas nos usuários que têm ao menos um item relevante no teste.
+Gerados por `python scripts/evaluate.py` (arquivo `results/metrics.csv`). As métricas de ranking são calculadas nos usuários que têm ao menos um item relevante no teste.
 
 | Modelo | Precision@10 | Recall@10 | MAP@10 | NDCG@10 | Cobertura | Diversidade | RMSE | MAE |
 |---|---|---|---|---|---|---|---|---|
-| Aleatório | 0,0030 | 0,0012 | 0,0009 | 0,0030 | 0,696 | 0,931 | — | — |
-| Popularidade | 0,0520 | 0,0403 | 0,0309 | 0,0657 | 0,012 | 0,535 | 0,994 | 0,770 |
-| User-based CF | 0,0669 | 0,0632 | 0,0441 | 0,0911 | 0,144 | 0,637 | **0,936** | 0,714 |
-| **Item-based CF** | **0,0840** | **0,0745** | **0,0579** | **0,1107** | **0,153** | 0,623 | 0,951 | **0,713** |
+| Aleatório | 0,0006 | 0,0026 | 0,0006 | 0,0013 | 0,9998 | 0,988 | — | — |
+| Popularidade | 0,0023 | 0,0109 | 0,0045 | 0,0071 | 0,004 | 0,952 | 1,713 | 1,352 |
+| User-based CF | 0,0060 | 0,0279 | 0,0118 | 0,0186 | 0,866 | 0,967 | 1,687 | 1,262 |
+| **Item-based CF** | **0,0131** | **0,0563** | **0,0323** | **0,0451** | **0,942** | 0,941 | **1,667** | **1,214** |
 
 **Leitura:**
 
-- O item-based CF supera a popularidade em NDCG@10 em cerca de **68 %** (0,111 contra 0,066) e o aleatório por uma ordem de grandeza. Recomendar pelo gosto de cada usuário compensa.
-- A popularidade recomenda quase sempre os mesmos filmes (cobertura de 1,2 % do catálogo). O CF chega a 15 %, então sugere itens mais variados.
+- O item-based CF tem NDCG@10 **6,4 vezes maior** que a popularidade (0,045 contra 0,007) e 35 vezes o do aleatório. O user-based fica no meio (2,6× a popularidade). Recomendar pelo gosto de cada leitor compensa.
+- A popularidade recomenda quase sempre os mesmos livros (cobertura de 0,4 % do catálogo). O CF chega a 87–94 %, então sugere livros variados.
 - O aleatório tem cobertura e diversidade altas, mas acerta quase nada. Essas duas métricas só fazem sentido lidas junto com as de acurácia.
-- Nas notas previstas, o user-based tem o menor RMSE (0,936) e o item-based o menor MAE. Os dois batem a popularidade (0,994).
-- Os valores absolutos de precisão são baixos, o que é normal: a base é muito esparsa (96,9 %) e o teste conta como acerto apenas o que o usuário **de fato avaliou** depois. Um filme bom que ele nunca avaliou conta como erro.
+- Nas notas previstas, o item-based tem o menor RMSE (1,667) e o menor MAE (1,214), à frente do user-based e da popularidade.
+- Os valores absolutos de precisão são baixos, o que é esperado: a matriz tem 99,65 % de células vazias e o teste só conta como acerto o que o usuário **de fato avaliou** depois. Um livro bom que ele nunca avaliou conta como erro.
 
 ### Exemplos para cinco usuários
 
-Em `results/exemplos_5_usuarios.md` há, para os usuários 380, 415, 574, 353 e 547, os filmes mais bem avaliados, o top-10 recomendado, a justificativa ("por semelhança com…"), os acertos no teste e o caso do usuário sem histórico. Trecho:
+Em `results/exemplos_5_usuarios.md` há, para cinco usuários de teste, os livros mais bem avaliados, o top-10 recomendado, a justificativa ("por semelhança com…"), os acertos no teste e o caso do usuário sem histórico. Trecho:
 
-> **Usuário 380** — 896 filmes avaliados (entre os 5,0: *Halloween*, *King Kong*, *Guardians of the Galaxy*)
-> 1. *Princess Bride, The (1987)* — por semelhança com *Star Wars: Episode V* e *Star Wars: Episode IV*
-> 2. *American History X (1998)* — por semelhança com *Fight Club* e *Reservoir Dogs*
-> …
-> 8. *2001: A Space Odyssey (1968)* — por semelhança com *Blade Runner* e *Brazil* ✅ acerto no teste
+> **Usuário 261603** — 22 livros avaliados (série *The Wheel of Time*, nota 10)
+> 1. *Lord of Chaos (The Wheel of Time, Book 6)* — por semelhança com *The Fires of Heaven* e *The Dragon Reborn*
+> 2. *The Path of Daggers (The Wheel of Time, Book 8)* — ✅ acerto no teste
+> 3. *Winter's Heart (The Wheel of Time, Book 9)* — ✅ acerto no teste
 
 ## 6. Limitações
 
-- **Cold-start:** usuário sem histórico recebe apenas os populares, sem personalização. Ela começa a partir da primeira avaliação feita na interface.
+- **Cold-start:** usuário sem histórico recebe apenas os populares, sem personalização. A personalização começa na primeira avaliação feita na interface.
 - **Esparsidade e viés de popularidade:** com poucos dados por item, as similaridades são ruidosas. O shrinkage ameniza, mas não elimina.
 - **Avaliação offline:** o teste só conhece o que o usuário avaliou. Recomendações boas mas nunca avaliadas contam como erro, então as métricas subestimam a qualidade real.
-- **Base pequena:** `ml-latest-small` tem 610 usuários. Os resultados não se generalizam para escalas maiores. A similaridade é calculada com matrizes densas item × item, o que só cabe em memória para catálogos de alguns milhares de itens.
-- **Sem conteúdo:** o modelo ignora gênero, elenco e sinopse. Um híbrido (CF + conteúdo) ajudaria em itens novos.
+- **Base muito esparsa:** depois do filtro, 99,65 % da matriz é vazia, e 63 % das interações originais (nota 0) foram descartadas por não serem notas reais. Sobram 4.368 dos 271 mil livros e 5.431 usuários. A similaridade usa matrizes densas item × item, o que só cabe em memória para catálogos de alguns milhares de itens.
+- **Edições duplicadas:** o mesmo livro pode ter vários ISBNs (edições diferentes) e aparecer mais de uma vez nas listas, porque o modelo os trata como itens distintos.
+- **Sem data:** sem timestamp, o teste é um sorteio e não simula "prever o futuro".
+- **Sem conteúdo:** o modelo ignora categoria, autor e sinopse. Um híbrido (CF + conteúdo) ajudaria em itens novos.
 - **Sem validação de hiperparâmetros:** vizinhos e shrinkage seguem valores usuais, não foram otimizados.
 - **Uso acadêmico:** não há autenticação, concorrência nem persistência robusta. As avaliações da interface vão para um CSV local.
 
@@ -133,7 +136,7 @@ python -m venv .venv
 .venv\Scripts\activate            # Linux/macOS: source .venv/bin/activate
 pip install -r requirements.txt
 
-python scripts/download_data.py   # baixa o MovieLens para data/
+python scripts/prepare_data.py    # baixa o Book-Crossing (Kaggle) e prepara data/bookcrossing/
 python scripts/evaluate.py        # (opcional) regenera métricas e exemplos em results/
 streamlit run app.py              # abre a interface em http://localhost:8501
 pytest                            # testes das métricas e das regras de recomendação
@@ -143,18 +146,21 @@ pytest                            # testes das métricas e das regras de recomen
 
 | Aba | Função |
 |---|---|
-| 📚 Histórico | itens avaliados pelo usuário, nota média e distribuição das notas |
-| ✨ Recomendações | top-N sem itens já vistos, com justificativa; troca de modelo na barra lateral |
-| ⭐ Avaliar itens | busca por título e nota; grava em `data/user_ratings.csv` e atualiza as recomendações |
-| 📊 Resultados | tabela e gráfico de métricas e relatório do tratamento dos dados |
+| 🏠 Visão geral | números da base, etapas do método e funil do tratamento dos dados |
+| 📖 Histórico | livros avaliados pelo usuário (com capa, autor e categoria), nota média e distribuições |
+| ✨ Recomendações | top-N sem livros já lidos, com justificativa e afinidade; comparação lado a lado com a popularidade |
+| ⭐ Avaliar livros | busca por título ou autor e nota; grava em `data/user_ratings.csv` e atualiza as recomendações |
+| 📊 Resultados | métricas, gráficos, leitura dos números e os exemplos para 5 usuários |
+
+As capas vêm da Open Library (pelo ISBN) e exigem internet; sem elas, o cartão mostra um gradiente com a inicial do título.
 
 ### Roteiro sugerido para a demonstração
 
-1. Apresentar o problema e a base (barra lateral → "Sobre a base").
+1. Apresentar o problema e a base na aba **Visão geral** (números, etapas do método, funil do tratamento).
 2. Escolher um usuário, mostrar o **Histórico** e depois as **Recomendações** (destacar que nada do histórico se repete e a justificativa).
-3. Trocar o modelo (item-based → user-based → popularidade) e comparar.
+3. Ativar **Comparar com o baseline de popularidade** nas recomendações e trocar o modelo (item-based → user-based).
 4. Selecionar **Novo usuário (sem histórico)**: aparecem os populares.
-5. Na aba **Avaliar itens**, avaliar 3 ou 4 filmes e ver as recomendações passarem a ser personalizadas.
+5. Na aba **Avaliar livros**, avaliar 3 ou 4 livros e ver as recomendações passarem a ser personalizadas.
 6. Fechar na aba **Resultados** com as métricas.
 
 ## Estrutura
@@ -162,7 +168,7 @@ pytest                            # testes das métricas e das regras de recomen
 ```
 app.py                 interface Streamlit
 config.yaml            base de dados, mapeamento de colunas e hiperparâmetros
-scripts/               download_data.py, evaluate.py
+scripts/               prepare_data.py, evaluate.py
 src/recsys/            data.py, models.py, metrics.py, evaluation.py
 tests/                 testes das métricas e dos recomendadores
 results/               metrics.csv e exemplos_5_usuarios.md (gerados)

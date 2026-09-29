@@ -24,7 +24,9 @@ def load_interactions(cfg: dict) -> pd.DataFrame:
     """Lê as interações e padroniza as colunas para user, item, rating, timestamp."""
     ds = cfg["dataset"]
     cols = ds["columns"]
-    raw = pd.read_csv(_resolve(ds["interactions_path"]), sep=ds.get("sep", ","))
+    # ids de item lidos como texto: ISBNs têm zeros à esquerda e letras (ex.: 034545104X)
+    raw = pd.read_csv(_resolve(ds["interactions_path"]), sep=ds.get("sep", ","),
+                      dtype={cols["item"]: str})
 
     df = pd.DataFrame({"user": raw[cols["user"]], "item": raw[cols["item"]]})
     # Sem coluna de nota -> feedback implícito (toda interação vale 1.0)
@@ -39,7 +41,7 @@ def load_new_ratings(cfg: dict) -> pd.DataFrame:
     path = _resolve(cfg.get("storage", {}).get("new_ratings_path"))
     if path is None or not path.exists():
         return pd.DataFrame(columns=["user", "item", "rating", "timestamp"])
-    return pd.read_csv(path)
+    return pd.read_csv(path, dtype={"item": str})
 
 
 def append_rating(cfg: dict, user, item, rating: float) -> None:
@@ -66,11 +68,16 @@ def load_items(cfg: dict) -> pd.DataFrame:
     if path is None or not path.exists():
         return pd.DataFrame(columns=["title", "extra"])
     ic = ds["items_columns"]
-    raw = pd.read_csv(path, sep=ds.get("sep", ","))
+    raw = pd.read_csv(path, sep=ds.get("sep", ","), dtype={ic["item"]: str})
+    def col(key):
+        return raw[ic[key]].fillna("").astype(str) if ic.get(key) else ""
+
     items = pd.DataFrame({
         "item": raw[ic["item"]],
         "title": raw[ic["title"]].astype(str),
-        "extra": raw[ic["extra"]].astype(str) if ic.get("extra") else "",
+        "extra": col("extra"),
+        "author": col("author"),
+        "year": col("year"),
     })
     return items.drop_duplicates("item").set_index("item")
 
@@ -140,6 +147,16 @@ class Dataset:
             return self.items.at[item_id, "extra"]
         return ""
 
+    def author(self, item_id) -> str:
+        if item_id in self.items.index:
+            return self.items.at[item_id, "author"]
+        return ""
+
+    def year(self, item_id) -> str:
+        if item_id in self.items.index:
+            return self.items.at[item_id, "year"]
+        return ""
+
     def __post_init__(self):
         self._uidx = {u: i for i, u in enumerate(self.user_ids)}
         self._iidx = {v: i for i, v in enumerate(self.item_ids)}
@@ -180,10 +197,15 @@ def load_dataset(cfg: dict, include_new: bool = True) -> tuple[Dataset, dict]:
 
 
 def train_test_split(ds: Dataset, cfg: dict) -> tuple[Dataset, pd.DataFrame]:
-    """Hold-out temporal por usuário: a fração mais recente das interações de cada
-    usuário com histórico suficiente vai para teste. Os demais usuários ficam só no treino."""
+    """Hold-out por usuário: uma fração das interações de cada usuário com histórico
+    suficiente vai para teste (as mais recentes se split="temporal"; sorteadas, com semente
+    fixa, se split="random" — para bases sem data). Os demais usuários ficam só no treino."""
     ev = cfg["evaluation"]
-    df = ds.df.sort_values(["user", "timestamp", "item"])
+    if ev.get("split", "temporal") == "random":
+        key = np.random.default_rng(ev.get("seed", 42)).random(len(ds.df))
+        df = ds.df.assign(_key=key).sort_values(["user", "_key"]).drop(columns="_key")
+    else:
+        df = ds.df.sort_values(["user", "timestamp", "item"])
     rank = df.groupby("user").cumcount()
     size = df.groupby("user")["item"].transform("size")
     n_test = np.floor(size * ev["test_fraction"]).astype(int)
