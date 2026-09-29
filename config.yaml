@@ -1,33 +1,37 @@
 # Configuração da base de dados. Para usar outra base, aponte "path" para o
 # seu CSV e ajuste o mapeamento de colunas abaixo.
 dataset:
-  name: MovieLens (ml-latest-small)
-  interactions_path: data/ml-latest-small/ratings.csv
-  items_path: data/ml-latest-small/movies.csv   # opcional (títulos dos itens); use null se não houver
+  name: Book-Crossing (Kaggle · ruchi798/bookcrossing-dataset)
+  interactions_path: data/bookcrossing/ratings.csv
+  items_path: data/bookcrossing/books.csv   # opcional (títulos dos itens); use null se não houver
   sep: ","
   columns:
-    user: userId
-    item: movieId
+    user: user
+    item: isbn
     rating: rating        # use null se a base só tiver interações (feedback implícito)
-    timestamp: timestamp  # opcional; use null se não houver
+    timestamp: null       # a base não tem data; use null se não houver
   items_columns:
-    item: movieId
+    item: isbn
     title: title
-    extra: genres         # opcional (ex.: gênero/categoria); use null se não houver
-  rating_scale: [0.5, 5.0]
-  relevance_threshold: 4.0   # nota mínima para considerar um item "relevante"
+    extra: category       # opcional (ex.: gênero/categoria); use null se não houver
+    author: author        # opcional
+    year: year            # opcional
+  rating_scale: [1, 10]   # notas 0 (feedback implícito no Book-Crossing) são descartadas
+  relevance_threshold: 8  # nota mínima para considerar um item "relevante"
 
 preprocessing:
   min_user_interactions: 5
-  min_item_interactions: 3
+  min_item_interactions: 8
 
 model:
   neighbors: 30          # vizinhos considerados na predição
   shrinkage: 10          # penaliza similaridades com poucos co-avaliadores
-  popularity_min_votes: 20
+  popularity_min_votes: 10
 
 evaluation:
-  test_fraction: 0.2     # fração mais recente de cada usuário vai para teste
+  split: random          # "temporal" (avaliações mais recentes) exige coluna de data
+  seed: 42
+  test_fraction: 0.2     # fração de cada usuário que vai para teste
   k: 10
   min_user_interactions_for_test: 5
 
